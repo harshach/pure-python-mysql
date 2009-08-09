@@ -12,7 +12,7 @@ def escape_item(val):
 
 def escape_dict(val):
     n = {}
-    for k, v in val.items():
+    for k, v in list(val.items()):
         quoted = escape_item(v)
         n[k] = quoted
     return n
@@ -211,7 +211,7 @@ def convert_mysql_timestamp(timestamp):
 encoders = {
         bool: escape_bool,
         int: escape_object,
-        long: escape_object,
+        int: escape_object,
         float: escape_float,
         str: escape_string,
         tuple: escape_sequence,
@@ -221,15 +221,15 @@ encoders = {
         datetime.timedelta : escape_timedelta
         }
 
-decorders = {
+decoders = {
         FIELD_TYPE.TINY: int,
         FIELD_TYPE.SHORT: int,
-        FIELD_TYPE.LONG: long,
+        FIELD_TYPE.LONG: int,
         FIELD_TYPE.FLOAT: float,
         FIELD_TYPE.DOUBLE: float,
         FIELD_TYPE.DECIMAL: float,
         FIELD_TYPE.NEWDECIMAL: float,
-        FIELD_TYPE.LONGLONG: long,
+        FIELD_TYPE.LONGLONG: int,
         FIELD_TYPE.INT24: int,
         FIELD_TYPE.YEAR: int,
         FIELD_TYPE.TIMESTAMP: convert_mysql_timestamp,
@@ -245,7 +245,7 @@ decorders = {
 try:
     # python version > 2.3
     from decimal import Decimal
-    decorders[FIELD_TYPE.DECIMAL] = Decimal
-    decorders[FIELD_TYPE.NEWDECIMAL] = Decimal
+    decoders[FIELD_TYPE.DECIMAL] = Decimal
+    decoders[FIELD_TYPE.NEWDECIMAL] = Decimal
 except ImportError:
     pass
