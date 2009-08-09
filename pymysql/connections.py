@@ -1,8 +1,8 @@
 import sys
 import struct
 import socket
-import sha
 import re
+import hashlib
 
 from pymysql.cursor import Cursor
 from pymysql.charset import MBLENGTH
@@ -37,21 +37,22 @@ def dump_packet(data):
         if data.isalnum():
             return data
         return '.'
-    print "packet length %d" % len(data)
-    print "method call: %s \npacket dump" % sys._getframe(2).f_code.co_name
-    print "-" * 88
-    dump_data = [data[i:i+16] for i in xrange(len(data)) if i%16 == 0]
+    print("packet length %d" % len(data))
+    print("method call: %s \npacket dump" % sys._getframe(2).f_code.co_name)
+    print("-" * 88)
+    dump_data = [data[i:i+16] for i in range(len(data)) if i%16 == 0]
     for d in dump_data:
-        print ' '.join(map(lambda x:"%02X" % ord(x), d)) + \
-                '   ' * (16 - len(d)) + ' ' * 2 + ' '.join(map(lambda x:"%s" % is_ascii(x), d))
-    print "-" * 88
-    print ""
+        print(' '.join(["%02X" % ord(x) for x in d]) + \
+                  '   ' * (16 - len(d)) + ' ' * 2 + ' '.join(["%s" % is_ascii(x) for x in d]))
+    print("-" * 88)
+    print("")
+    
 
 def _scramble(password, message):
-    stage1 = sha.new(password).digest()
-    stage2 = sha.new(stage1).digest()
-    s = sha.new()
-    s.update(message)
+    stage1 = hashlib.sha1(str.encode(password,'latin1')).digest()
+    stage2 = hashlib.sha1(stage1).digest()
+    s = hashlib.sha1()
+    s.update(str.encode(message,'latin1'))
     s.update(stage2)
     result = s.digest()
     return _my_crypt(result, stage1)
@@ -59,28 +60,27 @@ def _scramble(password, message):
 def _my_crypt(message1, message2):
     length = len(message1)
     result = ''
-    for i in xrange(length):
+    for i in range(length):
         x = (struct.unpack('B', message1[i:i+1])[0] ^ struct.unpack('B', message2[i:i+1])[0])
-        result += struct.pack('B', x)
-
+        result += struct.pack('B', x).decode('latin1')
     return result
 
 def pack_int24(n):
     return struct.pack('B', n%256) + struct.pack('H', n>>8)
 
 def unpack_int24(n):
-    return struct.unpack('B',n[0])[0] + (struct.unpack('B', n[1])[0] << 8) +\
-        (struct.unpack('B',n[2])[0] << 16)
+    return struct.unpack('B',n[0].encode('latin1'))[0] + (struct.unpack('B',n[1].encode('latin1'))[0] << 8) +\
+        (struct.unpack('B',n[2].encode('latin1'))[0] << 16)
 
 def unpack_int32(n):
-    return struct.unpack('B',n[0])[0] + (struct.unpack('B', n[1])[0] << 8) +\
-        (struct.unpack('B',n[2])[0] << 16) + (struct.unpack('B', n[3])[0] << 24)
+    return struct.unpack('B',n[0].encode('latin1'))[0] + (struct.unpack('B', n[1].encode('latin1'))[0] << 8) +\
+        (struct.unpack('B',n[2].encode('latin1'))[0] << 16) + (struct.unpack('B', n[3])[0] << 24)
 
 def unpack_int64(n):
-    return struct.unpack('B',n[0])[0] + (struct.unpack('B', n[1])[0]<<8) +\
-    (struct.unpack('B',n[2])[0] << 16) + (struct.unpack('B',n[3])[0]<<24)+\
-    (struct.unpack('B',n[4])[0] << 32) + (struct.unpack('B',n[5])[0]<<40)+\
-    (struct.unpack('B',n[6])[0] << 48) + (struct.unpack('B',n[7])[0]<<56)
+    return struct.unpack('B',n[0].encode('latin1'))[0] + (struct.unpack('B', n[1].encode('latin1'))[0]<<8) +\
+    (struct.unpack('B',n[2].encode('latin1'))[0] << 16) + (struct.unpack('B',n[3].encode('latin1'))[0]<<24)+\
+    (struct.unpack('B',n[4].encode('latin1'))[0] << 32) + (struct.unpack('B',n[5].encode('latin1'))[0]<<40)+\
+    (struct.unpack('B',n[6].encode('latin1'))[0] << 48) + (struct.unpack('B',n[7].encode('latin1'))[0]<<56)
 
 def defaulterrorhandler(connection, cursor, errorclass, errorvalue):
     err = errorclass, errorvalue
@@ -91,7 +91,7 @@ def defaulterrorhandler(connection, cursor, errorclass, errorvalue):
         connection.messages.append(err)
     del cursor
     del connection
-    raise errorclass, errorvalue
+    raise errorclass(errorvalue)
 
 class Connection(object):
     
@@ -180,7 +180,7 @@ class Connection(object):
     
     def _read_and_check_packet(self):    
         recv_data = self.socket.recv(BUFFER_SIZE)
-        if DEBUG: dump_packet(recv_data)
+        if DEBUG: dump_packet(recv_data.decode('latin1'))
         self._check_error(recv_data)
         return recv_data
 
@@ -198,10 +198,10 @@ class Connection(object):
         return affected_rows
 
     def _send_command(self, command, sql):
-        send_data = struct.pack('<l', len(sql) + 1) + command + sql
+        send_data = struct.pack('<l', len(sql) + 1) + command.encode('latin1') + sql.encode('latin1')
         sock = self.socket
         sock.send(send_data)
-        if DEBUG: dump_packet(send_data)
+        if DEBUG: dump_packet(send_data.decode('latin1'))
 
     def _execute_command(self, command, sql):
         self._send_command(command, sql)
@@ -232,51 +232,47 @@ class Connection(object):
         self.client_flag |= CLIENT_CAPABILITIES
         if self.server_version.startswith('5'):
             self.client_flag |= CLIENT_MULTI_RESULTS
-    
-        data = (struct.pack('l', self.client_flag)) + "\0\0\0\x01" + \
+        data = (struct.pack('l', self.client_flag)).decode('latin1') + "\0\0\0\x01" + \
                 '\x08' + '\0'*23 + \
-                self.user+"\0\x14" + _scramble(self.password, self.salt)
-        
+                self.user+"\0\x14"+ _scramble(self.password, self.salt)
         if self.db:
-            data += self.db + "\0"
+            data += self.db + '\0'
         
-        data = pack_int24(len(data)) + "\x01" + data
+        data = (pack_int24(len(data))).decode('latin1') +"\x01" + data
         
         if DEBUG:dump_packet(data)
         
-        sock.send(data)
+        sock.send(str.encode(data,'latin1'))
         
         auth_msg = sock.recv(BUFFER_SIZE)
         self._check_auth_packet(auth_msg)
         
     def _check_auth_packet(self, recv_data):
-        if DEBUG: dump_packet(recv_data)
+        if DEBUG: dump_packet(recv_data.decode('latin1'))
         self._check_error(recv_data)
 
     def _get_server_information(self):
         sock = self.socket
         i = 0
-        data = sock.recv(BUFFER_SIZE)
+        data = sock.recv(BUFFER_SIZE).decode('latin1')
         if DEBUG: dump_packet(data)
         packet_len = ord(data[i:i+1])
         i += 4
         self.protocol_version = ord(data[i:i+1])
-        
         i += 1
         server_end = data.find("\0", i)
         self.server_version = data[i:server_end]
         
         i = server_end + 1
-        self.server_thread_id = struct.unpack('h', data[i:i+2])
+        self.server_thread_id = struct.unpack('h', str.encode(data[i:i+2],'latin1'))
 
         i += 4
         self.salt = data[i:i+8]
-        
         i += 9
         if len(data) >= i + 1:
             i += 1
        
-        self.sever_capabilities = struct.unpack('h', data[i:i+2])
+        self.sever_capabilities = struct.unpack('h', str.encode(data[i:i+2],'latin1'))
         
         i += 1
         self.sever_language = ord(data[i:i+1])
@@ -335,7 +331,7 @@ class MySQLResult(object):
         self.message = self.data[self.position:]
     
     def _check_has_more_packet(self):
-        packet_len = unpack_int24(self.data[:3])
+        packet_len = unpack_int24(self.data[:3].decode('latin1'))
         length = len(self.data) - 4
         while length < packet_len:
             d = self.connection.socket.recv(BUFFER_SIZE)
@@ -384,7 +380,7 @@ class MySQLResult(object):
         data = self.data
         pos = self.position
         description = []
-        for i in xrange(self.field_count):
+        for i in range(self.field_count):
             desc = []
             catalog = self._seek_and_get_string()   
             db = self._seek_and_get_string()
@@ -460,15 +456,15 @@ class MySQLResult(object):
             self.position += UNSIGNED_SHORT_LENGTH
             return len
         elif c == UNSIGNED_INT24_COLUMN:
-            len = unpack_int24(data[pos:pos+UNSIGNED_INT24_COLUMN])
+            len = unpack_int24(data[pos:pos+UNSIGNED_INT24_COLUMN].decode('latin1'))
             self.position += UNSIGNED_INT24_LENGTH
             return len
         else:
             len = 0
             if longlong:
-                len = unpack_int64(data[pos:pos+UNSIGNED_INT32_LENGTH*2])
+                len = unpack_int64(data[pos:pos+UNSIGNED_INT32_LENGTH*2].decode('latin1'))
             else:
-                len = unpack_int32(data[pos:pos+UNSIGNED_INT32_LENGTH])
+                len = unpack_int32(data[pos:pos+UNSIGNED_INT32_LENGTH].decode('latin1'))
             
             self.position += UNSIGNED_INT32_LENGTH
             self.position += UNSIGNED_INT32_PAD_LENGTH
