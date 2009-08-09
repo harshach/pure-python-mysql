@@ -6,7 +6,7 @@ import hashlib
 
 from pymysql.cursor import Cursor
 from pymysql.charset import MBLENGTH
-from pymysql.converters import escape_item, encoders, decorders
+from pymysql.converters import escape_item, encoders, decoders
 from pymysql.constants import FIELD_TYPE
 from pymysql.constants import SERVER_STATUS
 from pymysql.constants.CLIENT_FLAG import *
@@ -29,7 +29,7 @@ UNSIGNED_INT32_LENGTH = 4
 UNSIGNED_INT32_PAD_LENGTH = 4
 
 DEFAULT_CHARSET = 'latin1'
-BUFFER_SIZE = 1024*1024
+BUFFER_SIZE = 256*256*256-1
 
 def dump_packet(data):
     
@@ -49,6 +49,9 @@ def dump_packet(data):
     
 
 def _scramble(password, message):
+    if password == None or len(password) ==0:
+        return '\0'
+    if DEBUG: print('password=' + password)
     stage1 = hashlib.sha1(str.encode(password,'latin1')).digest()
     stage2 = hashlib.sha1(stage1).digest()
     s = hashlib.sha1()
@@ -59,14 +62,14 @@ def _scramble(password, message):
 
 def _my_crypt(message1, message2):
     length = len(message1)
-    result = ''
+    result = struct.pack('B',length)
     for i in range(length):
         x = (struct.unpack('B', message1[i:i+1])[0] ^ struct.unpack('B', message2[i:i+1])[0])
-        result += struct.pack('B', x).decode('latin1')
+        result += struct.pack('B', x)
     return result
 
 def pack_int24(n):
-    return struct.pack('B', n%256) + struct.pack('H', n>>8)
+    return struct.pack('BBB', n&0xFF, (n>>8)&0xFF, (n>>16)&0xFF)
 
 def unpack_int24(n):
     return struct.unpack('B',n[0].encode('latin1'))[0] + (struct.unpack('B',n[1].encode('latin1'))[0] << 8) +\
@@ -103,6 +106,7 @@ class Connection(object):
         self.user = kwargs['user']
         self.password = kwargs['password']
         self.db = kwargs.get('db', None)
+        self.unix_socket = kwargs.get('unix_socket', None)
         self.charset = DEFAULT_CHARSET
         
         client_flag = CLIENT_CAPABILITIES
@@ -118,7 +122,7 @@ class Connection(object):
         self.set_chatset_set(charset)
         self.messages = []
         self.encoders =  encoders
-        self.decorders = decorders
+        self.decoders = decoders
         
         self.autocommit(False)
         
@@ -172,8 +176,14 @@ class Connection(object):
             self.charset = charset     
 
     def _connect(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((self.host, self.port))
+        if self.unix_socket and (self.host == 'localhost' or self.host == '127.0.0.1'):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.connect(self.unix_socket)
+            if DEBUG: print('connected using unix_socket')
+        else:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((self.host, self.port))
+            if DEBUG: print('connected using socket')
         self.socket = sock
         self._get_server_information()
         self._request_authentication()
@@ -232,9 +242,9 @@ class Connection(object):
         self.client_flag |= CLIENT_CAPABILITIES
         if self.server_version.startswith('5'):
             self.client_flag |= CLIENT_MULTI_RESULTS
-        data = (struct.pack('l', self.client_flag)).decode('latin1') + "\0\0\0\x01" + \
+        data = (struct.pack('i', self.client_flag)).decode('latin1') + "\0\0\0\x01" + \
                 '\x08' + '\0'*23 + \
-                self.user+"\0\x14"+ _scramble(self.password, self.salt)
+                self.user+ "\0" + _scramble(self.password, self.salt).decode('latin1')
         if self.db:
             data += self.db + '\0'
         
@@ -281,6 +291,9 @@ class Connection(object):
         if len(data) >= i+12-1:
             rest_salt = data[i:i+12]
             self.salt += rest_salt
+
+    def get_server_info(self):
+        return self.server_version
 
     Warning = Warning
     Error = Error
@@ -344,30 +357,32 @@ class MySQLResult(object):
         self._read_rowdata_packet()
 
     def _read_rowdata_packet(self):
-        
-        not_eof = True
         rows = []
+        not_eof = True
         while(not_eof):
             row = []
-            for field in self.description:
-                type_code = field[1]
-                converter = self.connection.decorders[type_code]
-                data = self._seek_and_get_string()
-                converted = converter(data)
-                row.append(converted)
-
-            rows.append(tuple(row))
-            self.position += 4
             next = ord(self.data[self.position:self.position+1])
-            
             if next == 254:
                 self.position += 3
                 server_status = struct.unpack('h', self.data[-2:])[0]
                 self.has_next = server_status & SERVER_STATUS.SERVER_MORE_RESULTS_EXISTS
                 not_eof = False
-                
+            else:
+	            for field in self.description:
+	                type_code = field[1]
+	                converter = self.connection.decoders[type_code]
+	                if DEBUG: print ("DEBUG: field=" + str(field[0]) + ", type_code=" + str(type_code) + ", converter=" + str(converter))
+	                data = self._seek_and_get_string()
+	                converted = None
+	                if data != None:
+	                    converted = converter(data)
+	                row.append(converted)
+	            rows.append(tuple(row))
+	            self.position += 4
+
         self.rows = tuple(rows)
         if DEBUG: self.rows
+
 
     def _get_field_count(self):
         self.position += 4
