@@ -8,11 +8,11 @@ pymysql Installation
 Requirements
 -------------
 
-+ Python 2.4 or higher
++ Python 3.0 or higher
 
  * http://www.python.org/
  
- * 2.5 is the primary test environment.
+ * 3.0 is the primary test environment.
 
 * MySQL 4.1 or higher
     
