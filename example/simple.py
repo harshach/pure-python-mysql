@@ -7,13 +7,13 @@ conn = pymysql.connect(host='localhost', port=3306, user='ma2', \
 cur = conn.cursor()
 #cur.execute("set names utf8")
 
-print cur.execute("select * from users")
+print(cur.execute("select * from users"))
 #row = cur.execute("select * from users;select * from users")
 
-print cur.description
+print(cur.description)
 
 r = cur.fetchall()
-print r
+print(r)
 
 #print cur.nextset()
 #r = cur.fetchall()
